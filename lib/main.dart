@@ -15,7 +15,7 @@ class AetherScanProApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'AetherScan Pro v26 Beta 4.1',
+      title: 'AetherScan Pro v26 Beta 1',
       debugShowCheckedModeBanner: false,
       theme: ThemeData.dark().copyWith(
         scaffoldBackgroundColor: const Color(0xFF060B12),
@@ -58,7 +58,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
   // Stato aggiornamento in-app
   bool _isUpdating = false;
   double _updateProgress = 0.0;
-  String _updateStatusText = 'Versione: v26 Beta 4.1 (Build 2026.11.01)';
+  String _updateStatusText = 'Versione: v26 Beta 1 (Build 2026.11.01)';
   bool _updateAvailable = false;
   String? _pendingIpaUrl;
 
@@ -528,7 +528,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
         setState(() {
           _isUpdating = false;
           _updateProgress = 0.0;
-          _updateStatusText = '⚠ Nessuna release trovata su GitHub.\nVersione corrente: v26 Beta 4.1';
+          _updateStatusText = '⚠ Nessuna release trovata su GitHub.\nVersione corrente: v26 Beta 1';
         });
         return;
       }
@@ -561,7 +561,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
       setState(() { _updateProgress = 0.8; _updateStatusText = 'Confronto versioni...'; });
 
       // Versione corrente: Beta 4.1
-      const currentBeta = 41;
+      const currentBeta = 1;
       final betaMatch = RegExp(r'beta[\-_]?(\d+)').firstMatch(tag);
       final remoteBeta = betaMatch != null
           ? int.tryParse(betaMatch.group(1) ?? '') ?? 0
@@ -581,7 +581,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
               'Premi INSTALLA per aggiornare via AltStore.';
         } else {
           _updateAvailable = false;
-          _updateStatusText = '✔ Sei aggiornato! Versione: v26 Beta 4.1 (Build 2026.11.01)';
+          _updateStatusText = '✔ Sei aggiornato! Versione: v26 Beta 1 (Build 2026.11.01)';
         }
       });
     } catch (e) {
@@ -634,7 +634,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                 children: [
                   TextSpan(text: 'AetherScan ', style: TextStyle(color: Colors.white)),
                   TextSpan(text: 'Pro ', style: TextStyle(color: Color(0xFF00EFFF))),
-                  TextSpan(text: 'v26 Beta 4.1', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 10)),
+                  TextSpan(text: 'v26 Beta 1', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 10)),
                 ],
               ),
             ),
@@ -1109,7 +1109,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                   children: [
                     Icon(Icons.system_update, color: Color(0xFF00EFFF), size: 18),
                     SizedBox(width: 8),
-                    Text('RICERCA AGGIORNAMENTI (v26 Beta 4.1)', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 13)),
+                    Text('RICERCA AGGIORNAMENTI (v26 Beta 1)', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 13)),
                   ],
                 ),
                 const SizedBox(height: 12),
