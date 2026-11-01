@@ -1,0 +1,74 @@
+name: Build AetherScan Pro Android (APK) - Beta 1
+
+on:
+  push:
+    branches: [ ghost_friends-italia, main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
+
+      - name: Install Dependencies
+        run: flutter pub get
+
+      - name: Build APK (Release unsigned)
+        run: flutter build apk --release --no-shrink
+
+      - name: Rename APK
+        run: |
+          mkdir -p release-android
+          cp build/app/outputs/flutter-apk/app-release.apk release-android/AetherScan-Pro-v26-beta1-01112026.apk
+
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: AetherScan-Pro-Android-APK
+          path: release-android/*.apk
+
+      - name: Create GitHub Release with APK
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v26-beta1-android
+          name: "AetherScan Pro v26 Beta 1 - Android (01/11/2026)"
+          body: |
+            ## AetherScan Pro v26 Beta 1 — Android
+            **Data build:** 01/11/2026
+
+            ### Fix e novità inclusi:
+            - ✅ Licenza persiste al riavvio app (SharedPreferences + retry 5x)
+            - ✅ TTS Android: race condition fixata (pendingSpeechText queue)
+            - ✅ Sensore Prossimità: allerta quando qualcosa si avvicina al dispositivo
+            - ✅ Sensore EMF/Magnetometro: rilevazione anomalie campo magnetico
+            - ✅ Voce maschile/femminile selezionabile
+            - ✅ Tab Analisi: spettrogramma + heatmap termografica animata
+            - ✅ Parola EVP inline (no popup) + auto-salvataggio archivio
+            - ✅ Frequenza anomalie ridotta (più realistica)
+            - ✅ Schermo sempre acceso durante scansione
+
+            ### Installazione
+            1. Abilita "Installa app da origini sconosciute" nelle impostazioni Android
+            2. Scarica e installa l'APK direttamente sullo smartphone
+          files: release-android/*.apk
+          draft: false
+          prerelease: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
