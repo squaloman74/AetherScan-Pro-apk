@@ -26,6 +26,9 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
     private var ttsReady = false
     private var staticTrack: AudioTrack? = null
     private var isStaticPlaying = false
+    // FIX Beta 4.1: coda per speech arrivato prima che onInit sia completato
+    private var pendingSpeechText: String? = null
+    private var pendingSpeechVolume: Float = 1.0f
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -121,14 +124,22 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener {
             tts?.setSpeechRate(0.85f)
             tts?.setPitch(0.95f)
             ttsReady = true
+            // FIX Beta 4.1: riproduci speech in coda se arrivato prima di onInit
+            pendingSpeechText?.let { speakText(it, pendingSpeechVolume) }
+            pendingSpeechText = null
         }
     }
 
     private fun speakText(text: String, volume: Float) {
         if (ttsReady && tts != null) {
+            // FIX Beta 4.1: KEY_PARAM_VOLUME deprecato in API 35+ → usa Bundle con STREAM_MUSIC
             val params = Bundle()
-            params.putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, volume.coerceIn(0.1f, 1.0f))
+            params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "EVP_ID_" + System.currentTimeMillis())
+        } else {
+            // FIX Beta 4.1: TTS non ancora pronto, metti in coda
+            pendingSpeechText = text
+            pendingSpeechVolume = volume
         }
     }
 
