@@ -1,4 +1,4 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
@@ -35,6 +35,7 @@ class MainTabScreen extends StatefulWidget {
 
 class _MainTabScreenState extends State<MainTabScreen> {
   static const _audioChannel = MethodChannel('com.aetherscan.pro/audio');
+  static const _sensorChannel = EventChannel('com.aetherscan.pro/sensors');
 
   int _currentTab = 0; // 0: SCANNER, 1: ARCHIVIO, 2: ANALISI, 3: IMPOSTAZIONI
 
@@ -53,6 +54,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
   double _ttsVolume = 1.0;
   bool _enableVoice = true;
   bool _enableChime = true;
+  String _voiceGender = 'female'; // 'female' | 'male'
   int _stepsSinceLastDetection = 0; // Filtro anti-allucinazione avanzato
 
   // Stato aggiornamento in-app
@@ -61,6 +63,14 @@ class _MainTabScreenState extends State<MainTabScreen> {
   String _updateStatusText = 'Versione: v26 Beta 1 (Build 2026.11.01)';
   bool _updateAvailable = false;
   String? _pendingIpaUrl;
+  String _audioDiagnosticResult = ''; // risultato diagnostica audio
+  StreamSubscription<dynamic>? _sensorSubscription;
+  bool _proximityAlert = false;
+  bool _emfSpikeAlert = false;
+  double _emfValue = 0.0;
+  double _emfDelta = 0.0;
+  DateTime? _lastProximityAlertTime;
+  DateTime? _lastEmfAlertTime;
 
   final List<String> _phonemes = [
     // Nomi di persona
@@ -106,13 +116,17 @@ class _MainTabScreenState extends State<MainTabScreen> {
   @override
   void initState() {
     super.initState();
+    // Aspetta che il frame sia pronto prima di usare il MethodChannel
+    // Evita il bug iOS dove il channel non risponde durante initState()
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _loadDeviceHwidAndLicense();
     });
   }
 
   Future<void> _loadDeviceHwidAndLicense() async {
-    for (int attempt = 0; attempt < 3; attempt++) {
+    // Attendi che il channel sia pronto (SceneDelegate: la window si connette dopo didFinishLaunch)
+    // Riprova fino a 5 volte con intervallo crescente
+    for (int attempt = 0; attempt < 5; attempt++) {
       try {
         final hwid = await _audioChannel.invokeMethod<String>('getDeviceHwid');
         final savedKey = await _audioChannel.invokeMethod<String>('getSavedLicense');
@@ -125,12 +139,13 @@ class _MainTabScreenState extends State<MainTabScreen> {
             _licenseInputController.text = savedKey;
           }
         });
-        return;
-      } catch (_) {
-        if (attempt == 2) {
-          if (mounted) setState(() { _deviceHwid = '584ef757835d045d9e504e0303ba70b6'; });
+        return; // successo
+      } catch (e) {
+        final wait = Duration(milliseconds: 300 * (attempt + 1));
+        if (attempt < 4) {
+          await Future.delayed(wait);
         } else {
-          await Future.delayed(const Duration(milliseconds: 300));
+          if (mounted) setState(() { _deviceHwid = '584ef757835d045d9e504e0303ba70b6'; });
         }
       }
     }
@@ -167,8 +182,17 @@ class _MainTabScreenState extends State<MainTabScreen> {
       } else if (word.contains('LAMENTO')) {
         toSpeak = 'ohhh... nooo...';
       }
-      _audioChannel.invokeMethod('speak', {'text': toSpeak, 'volume': _ttsVolume});
+      _audioChannel.invokeMethod('speak', {'text': toSpeak, 'volume': _ttsVolume, 'gender': _voiceGender});
     } catch (_) {}
+  }
+
+  Future<void> _runAudioDiagnostic() async {
+    try {
+      final result = await _audioChannel.invokeMethod<String>('audioDiagnostic');
+      setState(() => _audioDiagnosticResult = result ?? 'Nessun risultato');
+    } catch (e) {
+      setState(() => _audioDiagnosticResult = 'ERRORE: $e');
+    }
   }
 
   void _toggleScan() {
@@ -205,8 +229,8 @@ class _MainTabScreenState extends State<MainTabScreen> {
         // 1. Finestra di scansione minima (minimo 18 step RF senza interruzioni)
         // 2. Probabilità tarata per evitare falsi positivi continui
         _stepsSinceLastDetection++;
-        if (_stepsSinceLastDetection > 18) {
-          if (Random().nextDouble() < 0.004) {
+        if (_stepsSinceLastDetection > 30) {
+          if (Random().nextDouble() < 0.0015) {
             _stepsSinceLastDetection = 0;
             _triggerAnomaly();
           }
@@ -548,7 +572,6 @@ class _MainTabScreenState extends State<MainTabScreen> {
       final releaseUrl = data['html_url'] as String?
           ?? 'https://github.com/squaloman74/AetherScan-Pro-ios/releases';
 
-      // Cerca file .ipa tra gli asset della release
       String? ipaUrl;
       for (final asset in assets) {
         final name = (asset['name'] as String? ?? '').toLowerCase();
@@ -560,7 +583,6 @@ class _MainTabScreenState extends State<MainTabScreen> {
 
       setState(() { _updateProgress = 0.8; _updateStatusText = 'Confronto versioni...'; });
 
-      // Versione corrente: Beta 4.1
       const currentBeta = 1;
       final betaMatch = RegExp(r'beta[\-_]?(\d+)').firstMatch(tag);
       final remoteBeta = betaMatch != null
@@ -594,7 +616,6 @@ class _MainTabScreenState extends State<MainTabScreen> {
     }
   }
 
-  // Apre AltStore per installare l'IPA, fallback alla pagina release GitHub
   void _openInstallUrl() {
     final url = _pendingIpaUrl;
     if (url == null) return;
@@ -1215,7 +1236,7 @@ class _MainTabScreenState extends State<MainTabScreen> {
                 Row(
                   mainAxisAlignment: MainAxisAlignment.spaceBetween,
                   children: [
-                    const Text('Volume Voce Android:', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 11)),
+                    const Text('Volume Voce:', style: TextStyle(color: Color(0xFF8CA2BA), fontSize: 11)),
                     Text('${(_ttsVolume * 100).round()}%', style: const TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontFamily: 'monospace')),
                   ],
                 ),
@@ -1235,6 +1256,31 @@ class _MainTabScreenState extends State<MainTabScreen> {
                     child: const Text('🔊 TESTA VOCE', style: TextStyle(color: Color(0xFF00EFFF), fontWeight: FontWeight.bold, fontSize: 11)),
                   ),
                 ),
+                const SizedBox(height: 6),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton(
+                    style: ElevatedButton.styleFrom(backgroundColor: const Color(0x2200FF88), side: const BorderSide(color: Color(0xFF00FF88))),
+                    onPressed: _runAudioDiagnostic,
+                    child: const Text('🔍 DIAGNOSTICA AUDIO', style: TextStyle(color: Color(0xFF00FF88), fontWeight: FontWeight.bold, fontSize: 11)),
+                  ),
+                ),
+                if (_audioDiagnosticResult.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFF0A1628),
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(color: const Color(0xFF1B3550)),
+                    ),
+                    child: SelectableText(
+                      _audioDiagnosticResult,
+                      style: const TextStyle(color: Color(0xFF00FF88), fontSize: 9.5, fontFamily: 'monospace'),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 10),
                 SwitchListTile(
                   contentPadding: EdgeInsets.zero,
@@ -1307,6 +1353,57 @@ class SpectrumPainter extends CustomPainter {
 
         final paint = Paint()..color = barColor;
         canvas.drawRect(Rect.fromLTWH(x, y, barW, blockH), paint);
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant CustomPainter oldDelegate) => true;
+}
+
+// --- HEATMAP TERMOGRAFICA ---
+class ThermoHeatmapPainter extends CustomPainter {
+  final bool isScanning;
+  final bool anomaly;
+  ThermoHeatmapPainter({required this.isScanning, required this.anomaly});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final rnd = Random();
+    const cols = 40;
+    const rows = 18;
+    final cellW = size.width / cols;
+    final cellH = size.height / rows;
+
+    for (int r = 0; r < rows; r++) {
+      for (int c = 0; c < cols; c++) {
+        double intensity;
+        if (!isScanning) {
+          intensity = 0.03 + rnd.nextDouble() * 0.07;
+        } else if (anomaly) {
+          final dx = (c - cols / 2).abs() / (cols / 2);
+          final dy = (r - rows / 2).abs() / (rows / 2);
+          intensity = (1.0 - dx * 0.6 - dy * 0.4).clamp(0.0, 1.0) * (0.7 + rnd.nextDouble() * 0.3);
+        } else {
+          final base = exp(-pow((c - cols / 2) / 12, 2)) * 0.5;
+          intensity = (base + rnd.nextDouble() * 0.25).clamp(0.0, 1.0);
+        }
+
+        final Color cellColor;
+        if (intensity < 0.2) {
+          cellColor = Color.lerp(const Color(0xFF020A14), const Color(0xFF0A3060), intensity / 0.2)!;
+        } else if (intensity < 0.45) {
+          cellColor = Color.lerp(const Color(0xFF0A3060), const Color(0xFF00EFFF), (intensity - 0.2) / 0.25)!;
+        } else if (intensity < 0.65) {
+          cellColor = Color.lerp(const Color(0xFF00EFFF), const Color(0xFF00FF88), (intensity - 0.45) / 0.20)!;
+        } else if (intensity < 0.82) {
+          cellColor = Color.lerp(const Color(0xFF00FF88), const Color(0xFFFFB700), (intensity - 0.65) / 0.17)!;
+        } else {
+          cellColor = Color.lerp(const Color(0xFFFFB700), const Color(0xFFFF1144), (intensity - 0.82) / 0.18)!;
+        }
+
+        final paint = Paint()..color = cellColor;
+        canvas.drawRect(Rect.fromLTWH(c * cellW + 0.5, r * cellH + 0.5, cellW - 1, cellH - 1), paint);
       }
     }
   }
