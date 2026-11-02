@@ -37,6 +37,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
     private var isStaticPlaying = false
     private var pendingSpeechText: String? = null
     private var pendingSpeechVolume: Float = 1.0f
+    private var pendingSpeechGender: String = "female"
 
     // Sensori
     private lateinit var sensorManager: SensorManager
@@ -79,7 +80,8 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
                 "speak" -> {
                     val text = call.argument<String>("text") ?: ""
                     val volume = call.argument<Double>("volume") ?: 1.0
-                    speakText(text, volume.toFloat())
+                    val gender = call.argument<String>("gender") ?: "female"
+                    speakText(text, volume.toFloat(), gender)
                     result.success(true)
                 }
                 "playBeep" -> {
@@ -93,6 +95,9 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
                 "playEmfAlert" -> { playEmfAlert(); result.success(true) }
                 "startStatic" -> { startRadioStatic(); result.success(true) }
                 "stopStatic"  -> { stopRadioStatic(); result.success(true) }
+                "audioDiagnostic" -> {
+                    result.success(buildDiagnostic())
+                }
                 "setWakeLock" -> {
                     val enabled = call.argument<Boolean>("enabled") ?: true
                     runOnUiThread {
@@ -126,6 +131,31 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
                     sensorEventSink = null
                 }
             })
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Diagnostica Audio e Sensori Android
+    // ──────────────────────────────────────────────────────────────────
+    private fun buildDiagnostic(): String {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
+        val currentVol = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val maxVol = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
+        val prefs = getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+        val savedKey = prefs.getString(PREF_KEY_LICENSE, "") ?: ""
+        val proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
+        val magSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+
+        return """
+=== DIAGNOSTICA AETHERSCAN (ANDROID) ===
+Channel registrato: true
+Volume Stream Music: $currentVol / $maxVol
+TTS Ready: $ttsReady
+TTS Lingua: ${tts?.language?.displayName ?: "N/D"}
+Licenza salvata: ${if (savedKey.isEmpty()) "NO" else "SI (${savedKey.length} chars)"}
+Prossimita: ${if (proximitySensor != null) "DISPONIBILE" else "NON DISPONIBILE"}
+Magnetometro (EMF): ${if (magSensor != null) "DISPONIBILE" else "NON DISPONIBILE"}
+EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f", emfBaseline)} uT
+""".trimIndent()
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -210,19 +240,36 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
             tts?.setSpeechRate(0.85f)
             tts?.setPitch(0.95f)
             ttsReady = true
-            pendingSpeechText?.let { speakText(it, pendingSpeechVolume) }
+            pendingSpeechText?.let { speakText(it, pendingSpeechVolume, pendingSpeechGender) }
             pendingSpeechText = null
         }
     }
 
-    private fun speakText(text: String, volume: Float) {
+    private fun speakText(text: String, volume: Float, gender: String = "female") {
         if (ttsReady && tts != null) {
+            val pitch = if (gender == "male") 0.80f else 1.10f
+            tts?.setPitch(pitch)
+            try {
+                val voices = tts?.voices
+                if (voices != null) {
+                    val matchingVoice = voices.firstOrNull { voice ->
+                        voice.locale.language == "it" && 
+                        ((gender == "male" && (voice.name.contains("male", ignoreCase = true) || voice.name.contains("masc", ignoreCase = true))) ||
+                         (gender == "female" && (voice.name.contains("female", ignoreCase = true) || voice.name.contains("femm", ignoreCase = true))))
+                    } ?: voices.firstOrNull { it.locale.language == "it" }
+                    if (matchingVoice != null) {
+                        tts?.voice = matchingVoice
+                    }
+                }
+            } catch (_: Exception) {}
+
             val params = Bundle()
             params.putInt(TextToSpeech.Engine.KEY_PARAM_STREAM, AudioManager.STREAM_MUSIC)
             tts?.speak(text, TextToSpeech.QUEUE_FLUSH, params, "EVP_ID_" + System.currentTimeMillis())
         } else {
             pendingSpeechText = text
             pendingSpeechVolume = volume
+            pendingSpeechGender = gender
         }
     }
 
