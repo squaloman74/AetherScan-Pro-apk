@@ -2,17 +2,19 @@ package com.aetherscan.pro.aetherscan_pro
 
 import android.content.Context
 import android.content.Intent
+import android.content.res.AssetFileDescriptor
 import android.hardware.Sensor
 import android.hardware.SensorEvent
 import android.hardware.SensorEventListener
 import android.hardware.SensorManager
+import android.media.AudioFormat
+import android.media.AudioManager
+import android.media.AudioTrack
+import android.media.MediaPlayer
 import android.net.Uri
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.tts.TextToSpeech
-import android.media.AudioFormat
-import android.media.AudioManager
-import android.media.AudioTrack
 import android.view.WindowManager
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -38,6 +40,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
     private var pendingSpeechText: String? = null
     private var pendingSpeechVolume: Float = 1.0f
     private var pendingSpeechGender: String = "female"
+    private var creepyMediaPlayer: MediaPlayer? = null
 
     // Sensori
     private lateinit var sensorManager: SensorManager
@@ -45,6 +48,10 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
     private var emfBaseline: Double = -1.0
     private var emfSpikeActive = false
     private var lastProximityNear = false
+
+    // Rilevamento tocco / sfioramento intelligente (anti-falsi positivi impugnatura)
+    private val gravity = FloatArray(3)
+    private var lastTouchTriggerTime = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,6 +100,10 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
                 "playChime" -> { playChimeSound(); result.success(true) }
                 "playProximityAlert" -> { playProximityAlert(); result.success(true) }
                 "playEmfAlert" -> { playEmfAlert(); result.success(true) }
+                "playCreepyLaugh" -> {
+                    playCreepyLaughSound()
+                    result.success(true)
+                }
                 "startStatic" -> { startRadioStatic(); result.success(true) }
                 "stopStatic"  -> { stopRadioStatic(); result.success(true) }
                 "audioDiagnostic" -> {
@@ -144,6 +155,7 @@ class MainActivity : FlutterActivity(), TextToSpeech.OnInitListener, SensorEvent
         val savedKey = prefs.getString(PREF_KEY_LICENSE, "") ?: ""
         val proximitySensor = sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         val magSensor = sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)
+        val accelSensor = sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)
 
         return """
 === DIAGNOSTICA AETHERSCAN (ANDROID) ===
@@ -154,6 +166,7 @@ TTS Lingua: ${tts?.language?.displayName ?: "N/D"}
 Licenza salvata: ${if (savedKey.isEmpty()) "NO" else "SI (${savedKey.length} chars)"}
 Prossimita: ${if (proximitySensor != null) "DISPONIBILE" else "NON DISPONIBILE"}
 Magnetometro (EMF): ${if (magSensor != null) "DISPONIBILE" else "NON DISPONIBILE"}
+Sensore Tocco (Accel): ${if (accelSensor != null) "DISPONIBILE" else "NON DISPONIBILE"}
 EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f", emfBaseline)} uT
 """.trimIndent()
     }
@@ -163,10 +176,13 @@ EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f"
     // ──────────────────────────────────────────────────────────────────
     private fun startSensors() {
         sensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)?.let {
-            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_UI)
         }
         sensorManager.getDefaultSensor(Sensor.TYPE_MAGNETIC_FIELD)?.let {
             sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_NORMAL)
+        }
+        sensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER)?.let {
+            sensorManager.registerListener(this, it, SensorManager.SENSOR_DELAY_GAME)
         }
     }
 
@@ -223,6 +239,31 @@ EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f"
                     ))
                 }
             }
+            Sensor.TYPE_ACCELEROMETER -> {
+                // Filtro passa-basso per la gravità (orientamento/movimento lento mano: alpha = 0.85)
+                val alpha = 0.85f
+                gravity[0] = alpha * gravity[0] + (1 - alpha) * event.values[0]
+                gravity[1] = alpha * gravity[1] + (1 - alpha) * event.values[1]
+                gravity[2] = alpha * gravity[2] + (1 - alpha) * event.values[2]
+
+                // Lineare (passa-alto): componente istantanea di accelerazione/impulso
+                val linearX = event.values[0] - gravity[0]
+                val linearY = event.values[1] - gravity[1]
+                val linearZ = event.values[2] - gravity[2]
+                val impulse = sqrt((linearX * linearX + linearY * linearY + linearZ * linearZ).toDouble())
+
+                // Soglia tarata: 3.2 m/s² (sensibile al tocco/sfioramento, ma ignora oscillazioni lente della mano)
+                val now = System.currentTimeMillis()
+                if (impulse > 3.2 && (now - lastTouchTriggerTime > 5000)) {
+                    lastTouchTriggerTime = now
+                    runOnUiThread {
+                        sensorEventSink?.success(mapOf(
+                            "type" to "touch",
+                            "intensity" to impulse
+                        ))
+                    }
+                }
+            }
         }
     }
 
@@ -274,7 +315,47 @@ EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f"
     }
 
     // ──────────────────────────────────────────────────────────────────
-    // Audio
+    // Riproduzione Suono Risata Inquietante (Creepy Laugh)
+    // ──────────────────────────────────────────────────────────────────
+    private fun playCreepyLaughSound() {
+        thread {
+            try {
+                creepyMediaPlayer?.release()
+                creepyMediaPlayer = null
+
+                // Prova 1: Risorsa nativa raw
+                val resId = resources.getIdentifier("creepy_laugh", "raw", packageName)
+                if (resId != 0) {
+                    creepyMediaPlayer = MediaPlayer.create(this@MainActivity, resId)
+                }
+
+                // Prova 2: Asset Flutter
+                if (creepyMediaPlayer == null) {
+                    val afd: AssetFileDescriptor = assets.openFd("flutter_assets/assets/audio/creepy_laugh.mp3")
+                    creepyMediaPlayer = MediaPlayer().apply {
+                        setDataSource(afd.fileDescriptor, afd.startOffset, afd.length)
+                        prepare()
+                    }
+                    afd.close()
+                }
+
+                creepyMediaPlayer?.apply {
+                    setAudioStreamType(AudioManager.STREAM_MUSIC)
+                    setVolume(1.0f, 1.0f)
+                    setOnCompletionListener { mp ->
+                        mp.release()
+                        creepyMediaPlayer = null
+                    }
+                    start()
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+    }
+
+    // ──────────────────────────────────────────────────────────────────
+    // Audio Sintetico (Beep / Chime / Prossimità / EMF)
     // ──────────────────────────────────────────────────────────────────
     private fun playTone(freqHz: Int, durationMs: Int) {
         thread {
@@ -349,6 +430,8 @@ EMF Baseline: ${if (emfBaseline < 0) "-1.0" else String.format(Locale.US, "%.1f"
         stopRadioStatic()
         tts?.stop()
         tts?.shutdown()
+        creepyMediaPlayer?.release()
+        creepyMediaPlayer = null
         super.onDestroy()
     }
 }
